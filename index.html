@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>パズルクエスト - 大冒険RPG</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <style>
+        /* カスタムフォントとベーススタイル */
+        @import url('https://fonts.googleapis.com/css2?family=DotGothic16&display=swap');
+        
+        body {
+            font-family: 'DotGothic16', sans-serif;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            overflow: hidden; /* スクロール防止 */
+        }
+
+        /* カードフリップのアニメーション設定 */
+        .card {
+            perspective: 1000px;
+            cursor: pointer;
+            aspect-ratio: 3/4;
+        }
+        
+        .card-inner {
+            transition: transform 0.5s;
+            transform-style: preserve-3d;
+            position: relative;
+            width: 100%;
+            height: 100%;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            border-radius: 0.5rem;
+        }
+
+        .card.flipped .card-inner {
+            transform: rotateY(180deg);
+        }
+
+        /* 揃ったカードはクリックできないようにし、消えるアニメーションを追加 */
+        .card.matched {
+            pointer-events: none;
+        }
+
+        .card.matched .card-inner {
+            transform: rotateY(180deg) scale(0.5);
+            opacity: 0;
+            transition: transform 0.5s, opacity 0.5s;
+        }
+
+        .card-face {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            backface-visibility: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 0.5rem;
+            border: 2px solid #fff;
+        }
+
+        /* カードの裏面（ゲーム開始時に見えている面） */
+        .card-cover {
+            background: linear-gradient(135deg, #2563eb, #1e40af);
+            transform: rotateY(0deg);
+            background-image: repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,0.1) 10px, rgba(255,255,255,0.1) 20px);
+        }
+        
+        .card-cover::after {
+            content: "⚔️";
+            font-size: 1.5rem;
+            opacity: 0.5;
+        }
+
+        /* カードの表面（絵柄の面） */
+        .card-value {
+            background: #f8fafc;
+            transform: rotateY(180deg);
+            font-size: 2rem;
+            color: #333;
+        }
+
+        /* モンスターのダメージアニメーション */
+        .monster-shake {
+            animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
+        }
+        
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-2px, 0, 0); }
+            20%, 80% { transform: translate3d(4px, 0, 0); filter: brightness(200%) hue-rotate(-50deg); }
+            30%, 50%, 70% { transform: translate3d(-8px, 0, 0); }
+            40%, 60% { transform: translate3d(8px, 0, 0); }
+        }
+
+        /* 画面フェード用 */
+        .screen-transition {
+            transition: opacity 0.5s ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white h-screen w-screen flex items-center justify-center">
+
+    <!-- ゲームコンテナ -->
+    <div id="game-container" class="relative w-full max-w-md h-full max-h-[850px] bg-gray-800 shadow-2xl overflow-hidden flex flex-col sm:rounded-2xl transition-all duration-1000">
+        
+        <!-- スタート画面 -->
+        <div id="start-screen" class="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-blue-900 to-black z-50">
+            <h1 class="text-5xl font-bold mb-4 text-yellow-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)] text-center tracking-widest">パズル<br>クエスト</h1>
+            <p class="mb-12 text-gray-300">ペアを揃えてモンスターを倒せ！</p>
+            <button id="btn-start" class="px-8 py-4 bg-yellow-500 hover:bg-yellow-400 text-gray-900 font-bold rounded-full text-xl shadow-[0_0_15px_rgba(234,179,8,0.5)] transition-transform transform hover:scale-105 active:scale-95">
+                冒険を始める
+            </button>
+        </div>
+
+        <!-- メインゲーム画面 -->
+        <div id="game-screen" class="hidden absolute inset-0 flex flex-col w-full h-full">
+            
+            <!-- 上部：バトルエリア（ステータス＆モンスター） -->
+            <div id="battle-area" class="h-[25%] min-h-[160px] flex flex-col items-center justify-between p-2 bg-opacity-80 transition-colors duration-1000">
+                <!-- レベルとステージ名 -->
+                <div class="w-full flex justify-between items-center text-sm mb-1 drop-shadow-md">
+                    <span id="stage-level" class="font-bold text-yellow-300">Level 1</span>
+                    <span id="stage-name" class="font-bold">スライムの森</span>
+                </div>
+                
+                <!-- プレイヤーの制限時間（時間切れで敗北） -->
+                <div class="w-full flex flex-col items-center mb-2">
+                    <div class="w-full max-w-[90%] bg-gray-900 rounded-full h-2 border border-gray-600 relative overflow-hidden">
+                        <div id="time-bar" class="bg-blue-400 h-full transition-all duration-1000 ease-linear" style="width: 100%"></div>
+                    </div>
+                </div>
+
+                <!-- モンスター表示 -->
+                <div class="flex-1 flex items-center justify-center">
+                    <div id="monster-sprite" class="text-6xl sm:text-7xl drop-shadow-[0_10px_10px_rgba(0,0,0,0.5)] transition-transform">
+                        💧
+                    </div>
+                </div>
+
+                <!-- モンスターのHPバー -->
+                <div class="w-full max-w-[80%] mt-4 bg-gray-700 rounded-full h-4 border-2 border-gray-900 relative overflow-hidden">
+                    <div id="monster-hp-bar" class="bg-red-500 h-full transition-all duration-300" style="width: 100%"></div>
+                    <span id="monster-hp-text" class="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-md">HP: 100/100</span>
+                </div>
+            </div>
+
+            <!-- 下部：パズルエリア -->
+            <div class="flex-1 bg-gray-900 bg-opacity-95 p-3 rounded-t-2xl shadow-[0_-10px_20px_rgba(0,0,0,0.3)] overflow-y-auto">
+                <div class="min-h-full flex items-center justify-center py-2">
+                    <div id="puzzle-grid" class="grid gap-2 w-full max-w-sm mx-auto">
+                        <!-- JavaScriptでカードが生成されます -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- リザルト（レベルクリア）画面 -->
+        <div id="result-screen" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-80 z-40 backdrop-blur-sm">
+            <h2 id="result-title" class="text-4xl font-bold text-yellow-400 mb-4 animate-bounce">レベルアップ！</h2>
+            <div class="text-6xl mb-6">✨</div>
+            <p id="result-desc" class="mb-8 text-lg text-white">モンスターを討伐した！</p>
+            <button id="btn-next" class="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-full text-xl shadow-lg transition-transform transform hover:scale-105 active:scale-95">
+                次のステージへ
+            </button>
+        </div>
+        
+        <!-- ゲームクリア画面 -->
+        <div id="clear-screen" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-yellow-600 to-yellow-900 z-50">
+            <h2 class="text-5xl font-bold text-white mb-6 drop-shadow-lg text-center leading-snug">祝・世界平和<br>🏆</h2>
+            <p class="mb-12 text-xl text-yellow-100 font-bold text-center px-4">すべての魔物を倒し、<br>パズルマスターとなった！</p>
+            <button id="btn-restart" class="px-8 py-4 bg-white text-yellow-900 font-bold rounded-full text-xl shadow-2xl transition-transform transform hover:scale-105 active:scale-95">
+                最初から遊ぶ
+            </button>
+        </div>
+
+        <!-- ゲームオーバー画面 -->
+        <div id="gameover-screen" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-red-900 to-black z-50">
+            <h2 class="text-5xl font-bold text-white mb-6 drop-shadow-lg text-center leading-snug">時間切れ...<br>💀</h2>
+            <p class="mb-12 text-xl text-red-200 font-bold text-center px-4">モンスターに敗北した。</p>
+            <button id="btn-retry" class="px-8 py-4 bg-white text-red-900 font-bold rounded-full text-xl shadow-2xl transition-transform transform hover:scale-105 active:scale-95">
+                もう一度挑戦する
+            </button>
+        </div>
+
+    </div>
+
+    <script>
+        // ゲームデータ・設定
+        const spellIcons = ['🗡️', '🏹', '🪄', '🔥', '❄️', '⚡', '💣', '⭐', '🌙', '☀️', '🌀', '💎', '🛡️', '💊', '📜', '🔔', '🗝️', '🔮', '☠️', '🍄', '🍎', '🥩', '🍀', '👑'];
+        
+        // ステージ（レベル）ごとの設定
+        // 難易度アップ要素：timeLimit(制限時間)、flipDelay(失敗時にカードが裏返るまでの猶予時間)
+        const levelsData = [
+            { id: 1, name: "スライムの森", enemy: "💧", bgClass: "bg-green-800", pairs: 2, gridCols: "grid-cols-2", timeLimit: 20, flipDelay: 1000 },
+            { id: 2, name: "ゴブリンの洞窟", enemy: "👺", bgClass: "bg-gray-800", pairs: 4, gridCols: "grid-cols-4", timeLimit: 40, flipDelay: 900 },
+            { id: 3, name: "幽霊の洋館", enemy: "👻", bgClass: "bg-purple-900", pairs: 6, gridCols: "grid-cols-4", timeLimit: 60, flipDelay: 800 },
+            { id: 4, name: "灼熱の火山", enemy: "🐉", bgClass: "bg-red-900", pairs: 8, gridCols: "grid-cols-4", timeLimit: 75, flipDelay: 700 },
+            { id: 5, name: "魔王城・入り口", enemy: "👿", bgClass: "bg-gray-950", pairs: 10, gridCols: "grid-cols-5", timeLimit: 90, flipDelay: 600 },
+            { id: 6, name: "暗黒の沼地", enemy: "🕷️", bgClass: "bg-purple-950", pairs: 12, gridCols: "grid-cols-4", timeLimit: 110, flipDelay: 600 },
+            { id: 7, name: "狂気の研究所", enemy: "🧟", bgClass: "bg-green-950", pairs: 14, gridCols: "grid-cols-4", timeLimit: 130, flipDelay: 550 },
+            { id: 8, name: "次元の狭間", enemy: "👽", bgClass: "bg-indigo-950", pairs: 16, gridCols: "grid-cols-4", timeLimit: 150, flipDelay: 550 },
+            { id: 9, name: "真・魔王城", enemy: "👹", bgClass: "bg-red-950", pairs: 18, gridCols: "grid-cols-4", timeLimit: 180, flipDelay: 500 },
+            { id: 10, name: "神の領域", enemy: "👁️", bgClass: "bg-yellow-950", pairs: 20, gridCols: "grid-cols-5", timeLimit: 200, flipDelay: 500 }
+        ];
+
+        // 状態管理
+        let currentLevelIndex = 0;
+        let cards = [];
+        let flippedCards = [];
+        let matchedPairs = 0;
+        let isBoardLocked = false;
+        
+        let maxHp = 0;
+        let currentHp = 0;
+        
+        let currentTime = 0;
+        let timerInterval = null;
+
+        // BGM関連 (Tone.js)
+        let bgmSynth;
+        let bgmLoop;
+        let isBgmPlaying = false;
+
+        // UI要素の取得
+        const dom = {
+            startScreen: document.getElementById('start-screen'),
+            gameScreen: document.getElementById('game-screen'),
+            resultScreen: document.getElementById('result-screen'),
+            clearScreen: document.getElementById('clear-screen'),
+            gameoverScreen: document.getElementById('gameover-screen'),
+            battleArea: document.getElementById('battle-area'),
+            stageLevel: document.getElementById('stage-level'),
+            stageName: document.getElementById('stage-name'),
+            monsterSprite: document.getElementById('monster-sprite'),
+            monsterHpBar: document.getElementById('monster-hp-bar'),
+            monsterHpText: document.getElementById('monster-hp-text'),
+            timeBar: document.getElementById('time-bar'),
+            puzzleGrid: document.getElementById('puzzle-grid'),
+            btnStart: document.getElementById('btn-start'),
+            btnNext: document.getElementById('btn-next'),
+            btnRestart: document.getElementById('btn-restart'),
+            btnRetry: document.getElementById('btn-retry')
+        };
+
+        // ボタンのイベントリスナー登録
+        dom.btnStart.addEventListener('click', async () => {
+            await initBGM();
+            startGame();
+        });
+        dom.btnNext.addEventListener('click', nextLevel);
+        dom.btnRestart.addEventListener('click', () => location.reload());
+        dom.btnRetry.addEventListener('click', () => location.reload());
+
+        // --- BGMの初期化と再生 ---
+        async function initBGM() {
+            if (isBgmPlaying) return;
+            await Tone.start();
+            
+            // シンプルなRPG風のループBGM
+            bgmSynth = new Tone.PolySynth(Tone.Synth).toDestination();
+            bgmSynth.volume.value = -12; // 音量控えめ
+            
+            const chords = [
+                ['C4', 'E4', 'G4'], // C
+                ['A3', 'C4', 'E4'], // Am
+                ['F3', 'A3', 'C4'], // F
+                ['G3', 'B3', 'D4']  // G
+            ];
+            let chordIndex = 0;
+            
+            bgmLoop = new Tone.Loop(time => {
+                bgmSynth.triggerAttackRelease(chords[chordIndex], '4n', time);
+                chordIndex = (chordIndex + 1) % chords.length;
+            }, '2n');
+            
+            Tone.Transport.bpm.value = 90;
+            Tone.Transport.start();
+            bgmLoop.start(0);
+            isBgmPlaying = true;
+        }
+
+        function stopBGM() {
+            if (bgmLoop) bgmLoop.stop();
+            Tone.Transport.stop();
+            isBgmPlaying = false;
+        }
+
+        // 1. ゲームの開始
+        function startGame() {
+            dom.startScreen.classList.add('hidden');
+            dom.gameScreen.classList.remove('hidden');
+            currentLevelIndex = 0;
+            loadLevel(currentLevelIndex);
+        }
+
+        // 2. レベルの読み込みとパズル生成
+        function loadLevel(index) {
+            const levelData = levelsData[index];
+            
+            // 状態リセット
+            flippedCards = [];
+            matchedPairs = 0;
+            isBoardLocked = false;
+            
+            // タイマーリセット
+            clearInterval(timerInterval);
+            currentTime = levelData.timeLimit;
+            updateTimeBar(levelData.timeLimit);
+            
+            // バトルエリアのUI更新
+            dom.stageLevel.textContent = `Level ${levelData.id}`;
+            dom.stageName.textContent = levelData.name;
+            dom.monsterSprite.textContent = levelData.enemy;
+            
+            // 背景色の更新（Tailwindのクラスを書き換え）
+            dom.battleArea.className = `h-[25%] min-h-[160px] flex flex-col items-center justify-between p-2 bg-opacity-80 transition-colors duration-1000 ${levelData.bgClass}`;
+            
+            // HP設定 (1ペア揃えるごとに10ダメージと仮定)
+            maxHp = levelData.pairs * 10;
+            currentHp = maxHp;
+            updateHpBar();
+
+            // デッキの生成
+            generateDeck(levelData.pairs);
+            
+            // グリッドのUI更新
+            dom.puzzleGrid.className = `grid gap-3 w-full max-w-sm mx-auto ${levelData.gridCols}`;
+            renderCards();
+            
+            // タイマー開始
+            startTimer(levelData.timeLimit);
+        }
+
+        // --- 制限時間タイマー処理 ---
+        function startTimer(maxTime) {
+            timerInterval = setInterval(() => {
+                currentTime--;
+                updateTimeBar(maxTime);
+
+                if (currentTime <= 0) {
+                    clearInterval(timerInterval);
+                    gameOver();
+                }
+            }, 1000);
+        }
+
+        function updateTimeBar(maxTime) {
+            const percent = Math.max(0, (currentTime / maxTime) * 100);
+            dom.timeBar.style.width = `${percent}%`;
+            
+            // 残り時間が少ないと赤くなる
+            if (percent > 30) {
+                dom.timeBar.className = "bg-blue-400 h-full transition-all duration-1000 ease-linear";
+            } else {
+                dom.timeBar.className = "bg-red-500 h-full transition-all duration-1000 ease-linear animate-pulse";
+            }
+        }
+
+        function gameOver() {
+            isBoardLocked = true;
+            stopBGM();
+            dom.gameoverScreen.classList.remove('hidden');
+            
+            // ゲームオーバーの効果音（不協和音）
+            if (bgmSynth) {
+                bgmSynth.triggerAttackRelease(['C3', 'C#3', 'D3'], '1n');
+            }
+        }
+
+        // 3. デッキ（カード配列）の生成
+        function generateDeck(pairCount) {
+            cards = [];
+            // 使用する絵柄をランダムに選ぶ
+            let shuffledSpells = [...spellIcons].sort(() => 0.5 - Math.random());
+            let selectedSpells = shuffledSpells.slice(0, pairCount);
+
+            // ペアを作成
+            selectedSpells.forEach(spell => {
+                cards.push({ id: Math.random(), value: spell, isMatched: false });
+                cards.push({ id: Math.random(), value: spell, isMatched: false });
+            });
+
+            // シャッフル
+            cards.sort(() => 0.5 - Math.random());
+        }
+
+        // 4. カードを画面に描画
+        function renderCards() {
+            dom.puzzleGrid.innerHTML = '';
+            
+            cards.forEach((card, index) => {
+                const cardEl = document.createElement('div');
+                cardEl.className = 'card';
+                cardEl.dataset.index = index;
+                
+                cardEl.innerHTML = `
+                    <div class="card-inner">
+                        <div class="card-face card-cover"></div>
+                        <div class="card-face card-value">${card.value}</div>
+                    </div>
+                `;
+                
+                // タップ/クリックイベント
+                cardEl.addEventListener('click', () => handleCardClick(cardEl, card));
+                dom.puzzleGrid.appendChild(cardEl);
+            });
+        }
+
+        // 5. カードクリック時の処理
+        function handleCardClick(cardEl, cardData) {
+            // 操作ロック中、または既にめくられている/揃っているカードは無視
+            if (isBoardLocked) return;
+            if (cardEl.classList.contains('flipped')) return;
+            
+            // カードをめくる
+            cardEl.classList.add('flipped');
+            flippedCards.push({ element: cardEl, data: cardData });
+
+            // 2枚めくったか判定
+            if (flippedCards.length === 2) {
+                isBoardLocked = true;
+                checkMatch();
+            }
+        }
+
+        // 6. ペアの判定と攻撃処理
+        function checkMatch() {
+            const [card1, card2] = flippedCards;
+            const currentDelay = levelsData[currentLevelIndex].flipDelay; // 難易度による猶予時間
+
+            if (card1.data.value === card2.data.value) {
+                // マッチ成功（攻撃）
+                setTimeout(() => {
+                    card1.element.classList.add('matched');
+                    card2.element.classList.add('matched');
+                    card1.data.isMatched = true;
+                    card2.data.isMatched = true;
+                    
+                    matchedPairs++;
+                    attackMonster();
+                    
+                    flippedCards = [];
+                    isBoardLocked = false;
+                }, 400); // めくり終わるのを少し待つ
+            } else {
+                // マッチ失敗（元に戻す。レベルが上がるとすぐ戻るようになる）
+                setTimeout(() => {
+                    card1.element.classList.remove('flipped');
+                    card2.element.classList.remove('flipped');
+                    
+                    flippedCards = [];
+                    isBoardLocked = false;
+                }, currentDelay); 
+            }
+        }
+
+        // 7. モンスターへの攻撃とHP更新
+        function attackMonster() {
+            // ダメージ計算（1ペア10ダメージ）
+            currentHp = Math.max(0, currentHp - 10);
+            updateHpBar();
+
+            // 攻撃アニメーション（画面揺れ）
+            dom.monsterSprite.classList.add('monster-shake');
+            setTimeout(() => {
+                dom.monsterSprite.classList.remove('monster-shake');
+                
+                // 撃破判定
+                if (currentHp <= 0) {
+                    levelCleared();
+                }
+            }, 400); // アニメーション終了時間と合わせる
+        }
+
+        // HPバーのUI更新
+        function updateHpBar() {
+            const percent = (currentHp / maxHp) * 100;
+            dom.monsterHpBar.style.width = `${percent}%`;
+            dom.monsterHpText.textContent = `HP: ${currentHp}/${maxHp}`;
+            
+            // HPの色を変える
+            if (percent > 50) {
+                dom.monsterHpBar.className = "bg-green-500 h-full transition-all duration-300";
+            } else if (percent > 20) {
+                dom.monsterHpBar.className = "bg-yellow-500 h-full transition-all duration-300";
+            } else {
+                dom.monsterHpBar.className = "bg-red-600 h-full transition-all duration-300";
+            }
+        }
+
+        // 8. レベルクリア時の処理
+        function levelCleared() {
+            isBoardLocked = true;
+            clearInterval(timerInterval); // タイマー停止
+            
+            setTimeout(() => {
+                // 最後のレベルかチェック
+                if (currentLevelIndex >= levelsData.length - 1) {
+                    stopBGM();
+                    dom.clearScreen.classList.remove('hidden');
+                } else {
+                    dom.resultScreen.classList.remove('hidden');
+                }
+            }, 800);
+        }
+
+        // 9. 次のレベルへ進む
+        function nextLevel() {
+            dom.resultScreen.classList.add('hidden');
+            currentLevelIndex++;
+            loadLevel(currentLevelIndex);
+        }
+
+    </script>
+</body>
+</html>
